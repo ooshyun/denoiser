@@ -289,6 +289,9 @@ class DemucsStreamer:
         Apply the model to mix using true real time evaluation.
         Normalization is done online as is the resampling.
         """
+        # length = streamer.total_length if first else streamer.stride
+        # total_length 661, stride 256
+        print(f"--- 1. {wav.shape}")
         begin = time.time()
         demucs = self.demucs
         resample_buffer = self.resample_buffer
@@ -301,31 +304,58 @@ class DemucsStreamer:
         if chin != demucs.chin:
             raise ValueError(f"Expected {demucs.chin} channels, got {chin}")
 
+        print(f"--- 2. {self.pending.shape}") # 0 -> 405
         self.pending = th.cat([self.pending, wav], dim=1)
         outs = []
+
+        print(f"--- 3. {self.pending.shape}") # 661
         while self.pending.shape[1] >= self.total_length:
             self.frames += 1
             frame = self.pending[:, :self.total_length]
             dry_signal = frame[:, :stride]
+            print(f"--- 4. frame: {frame.shape}") # 661
+            print(f"--- 4. dry signel: {dry_signal.shape}") # 256
             if demucs.normalize:
                 mono = frame.mean(0)
                 variance = (mono**2).mean()
                 self.variance = variance / self.frames + (1 - 1 / self.frames) * self.variance
                 frame = frame / (demucs.floor + math.sqrt(self.variance))
+            
             padded_frame = th.cat([self.resample_in, frame], dim=-1)
             self.resample_in[:] = frame[:, stride - resample_buffer:stride]
             frame = padded_frame
+            
+            print(f"--- 5. padded frame: {frame.shape}") # 917
+            print(f"--- 5. resample_in: {resample_buffer}, {self.resample_in.shape}") # 256
 
             if resample == 4:
                 frame = upsample2(upsample2(frame))
             elif resample == 2:
                 frame = upsample2(frame)
+            
+            print(f"--- 6. upsampled frame: {frame.shape}") # 3668
+            
             frame = frame[:, resample * resample_buffer:]  # remove pre sampling buffer
+
+            print(f"--- 7. remove pre sampling buffer: {frame.shape}") # 2644
+
             frame = frame[:, :resample * self.frame_length]  # remove extra samples after window
 
-            out, extra = self._separate_frame(frame)
+            print(f"--- 8. remove extra samples after window: {frame.shape} {self.frame_length}") # 2388
+            print(f"----8. demucs.valid_length(1): {demucs.valid_length(1)}") # 597
+            print(f"----8. demucs.total_stride: {demucs.total_stride}") # 256
+
+            out, extra = self._separate_frame(frame) # [TODO]
+
+            print(f"--- 9. out: {out.shape}") # 1024
+            print(f"--- 9. extra: {extra.shape}") # 1364
+
             padded_out = th.cat([self.resample_out, out, extra], 1)
+            
+            print(f"--- 10. padded_out: {padded_out.shape}") # 2644
+            print(f"--- 11. self.resample_out: {self.resample_out.shape}") # 256
             self.resample_out[:] = out[:, -resample_buffer:]
+
             if resample == 4:
                 out = downsample2(downsample2(padded_out))
             elif resample == 2:
@@ -333,14 +363,20 @@ class DemucsStreamer:
             else:
                 out = padded_out
 
+            print(f"--- 12. out: {out.shape}") # 661
+
             out = out[:, resample_buffer // resample:]
+            print(f"--- 13. out: {out.shape}") # 597
+            
             out = out[:, :stride]
+            print(f"--- 14. out: {out.shape}") # 256
 
             if demucs.normalize:
                 out *= math.sqrt(self.variance)
             out = self.dry * dry_signal + (1 - self.dry) * out
             outs.append(out)
             self.pending = self.pending[:, stride:]
+            print(f"--- 15. outs: {len(outs)}") # 1364
 
         self.total_time += time.time() - begin
         if outs:

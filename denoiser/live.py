@@ -75,11 +75,12 @@ def query_devices(device, kind):
         sys.exit(1)
     return caps
 
-
 def main():
     args = get_parser().parse_args()
     if args.num_threads:
         torch.set_num_threads(args.num_threads)
+
+    print(sd.query_devices())
 
     model = get_model(args).to(args.device)
     model.eval()
@@ -128,10 +129,12 @@ def main():
             current_time += length / model.sample_rate
             frame, overflow = stream_in.read(length)
             frame = torch.from_numpy(frame).mean(dim=1).to(args.device)
+            print("   Start")
             with torch.no_grad():
                 out = streamer.feed(frame[None])[0]
             if not out.numel():
                 continue
+            print("   End")
             if args.compressor:
                 out = 0.99 * torch.tanh(out)
             out = out[:, None].repeat(1, channels_out)
